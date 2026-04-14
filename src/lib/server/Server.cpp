@@ -1551,8 +1551,10 @@ void Server::onKeyDown(KeyID id, KeyModifierMask mask, KeyButton button, const s
   LOG_DEBUG1("onKeyDown id=%d mask=0x%04x button=0x%04x lang=%s", id, mask, button, lang.c_str());
   assert(m_active != nullptr);
 
-  // apply per-screen keystroke remapping (skip for server screen)
-  if (m_active != m_primaryClient) {
+  // apply per-screen keystroke remapping only for normal key routing
+  // to the active screen (skip for server screen, broadcasting, and
+  // InputFilter-targeted screen sets)
+  if (m_active != m_primaryClient && !m_keyboardBroadcasting && IKeyState::KeyInfo::isDefault(screens)) {
     const std::string activeName = getName(m_active);
     const auto *mapping = m_config->findKeystrokeMapping(activeName, id, mask);
     if (mapping) {
