@@ -472,4 +472,20 @@ private:
   bool m_defaultLockToScreenState = false;
   bool m_disableLockToScreen = false;
   bool m_enableClipboard = true;
+
+  // tracks active keystroke remaps by physical key button so that
+  // key-up events are remapped consistently even if modifiers change
+  class ActiveRemap
+  {
+  public:
+    ActiveRemap(KeyID dstKey, KeyModifierMask dstMask) : m_dstKey(dstKey), m_dstMask(dstMask)
+    {
+      // do nothing
+    }
+
+  public:
+    KeyID m_dstKey;
+    KeyModifierMask m_dstMask;
+  };
+  std::map<KeyButton, ActiveRemap> m_activeRemaps;
 };

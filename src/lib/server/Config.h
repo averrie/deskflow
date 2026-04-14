@@ -10,6 +10,7 @@
 #include "base/BaseException.h"
 #include "base/String.h"
 #include "deskflow/IPlatformScreen.h"
+#include "deskflow/KeyTypes.h"
 #include "deskflow/OptionTypes.h"
 #include "net/NetworkAddress.h"
 #include "server/InputFilter.h"
@@ -17,6 +18,7 @@
 #include <iosfwd>
 #include <map>
 #include <set>
+#include <vector>
 
 namespace deskflow::server {
 class Config;
@@ -53,6 +55,28 @@ class Config
 public:
   using ScreenOptions = std::map<OptionID, OptionValue>;
   using Interval = std::pair<float, float>;
+
+  //! Per-screen keystroke remapping entry
+  class KeystrokeMapping
+  {
+  public:
+    KeystrokeMapping(KeyID srcKey, KeyModifierMask srcMask, KeyID dstKey, KeyModifierMask dstMask);
+    ~KeystrokeMapping() = default;
+
+    KeyID getSrcKey() const;
+    KeyModifierMask getSrcMask() const;
+    KeyID getDstKey() const;
+    KeyModifierMask getDstMask() const;
+
+    bool operator==(const KeystrokeMapping &) const;
+
+  private:
+    KeyID m_srcKey;
+    KeyModifierMask m_srcMask;
+    KeyID m_dstKey;
+    KeyModifierMask m_dstMask;
+  };
+  using KeystrokeMappings = std::vector<KeystrokeMapping>;
 
   class CellEdge
   {
@@ -132,6 +156,7 @@ private:
 
   public:
     ScreenOptions m_options;
+    KeystrokeMappings m_keystrokeMappings;
   };
   using CellMap = std::map<std::string, Cell, deskflow::string::CaselessCmp>;
   using NameMap = std::map<std::string, std::string, deskflow::string::CaselessCmp>;
@@ -319,6 +344,27 @@ public:
   iff \c name is a known screen.
   */
   bool removeOptions(const std::string &name);
+
+  //! Add a per-screen keystroke mapping
+  /*!
+  Adds a keystroke remapping to the named screen. Returns true iff
+  \c name is a known screen.
+  */
+  bool addKeystrokeMapping(const std::string &name, const KeystrokeMapping &mapping);
+
+  //! Find a per-screen keystroke mapping
+  /*!
+  Returns a pointer to the matching keystroke mapping for the named
+  screen, or nullptr if no match. Compares only non-toggle modifier bits.
+  */
+  const KeystrokeMapping *findKeystrokeMapping(const std::string &screenName, KeyID key, KeyModifierMask mask) const;
+
+  //! Get per-screen keystroke mappings
+  /*!
+  Returns the keystroke mappings for the named screen, or nullptr
+  if the screen is unknown.
+  */
+  const KeystrokeMappings *getKeystrokeMappings(const std::string &screenName) const;
 
   //! Get the hot key input filter
   /*!

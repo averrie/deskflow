@@ -464,6 +464,9 @@ void Server::switchScreen(BaseClientProxy *dst, int32_t x, int32_t y, bool forSc
     }
 #endif
 
+    // discard any active keystroke remaps from the departing screen
+    m_activeRemaps.clear();
+
     // cut over
     m_active = dst;
 
@@ -1548,6 +1551,21 @@ void Server::onKeyDown(KeyID id, KeyModifierMask mask, KeyButton button, const s
   LOG_DEBUG1("onKeyDown id=%d mask=0x%04x button=0x%04x lang=%s", id, mask, button, lang.c_str());
   assert(m_active != nullptr);
 
+  // apply per-screen keystroke remapping (skip for server screen)
+  if (m_active != m_primaryClient) {
+    const std::string activeName = getName(m_active);
+    const auto *mapping = m_config->findKeystrokeMapping(activeName, id, mask);
+    if (mapping) {
+      LOG_DEBUG1(
+          "keystroke remap for \"%s\": id=%d mask=0x%04x -> id=%d mask=0x%04x", activeName.c_str(), id, mask,
+          mapping->getDstKey(), mapping->getDstMask()
+      );
+      id = mapping->getDstKey();
+      mask = mapping->getDstMask();
+      m_activeRemaps.insert_or_assign(button, ActiveRemap(mapping->getDstKey(), mapping->getDstMask()));
+    }
+  }
+
   // relay
   if (!m_keyboardBroadcasting && IKeyState::KeyInfo::isDefault(screens)) {
     m_active->keyDown(id, mask, button, lang);
@@ -1570,6 +1588,14 @@ void Server::onKeyUp(KeyID id, KeyModifierMask mask, KeyButton button, const cha
 {
   LOG_DEBUG1("onKeyUp id=%d mask=0x%04x button=0x%04x", id, mask, button);
   assert(m_active != nullptr);
+
+  // apply tracked keystroke remap for key-up consistency
+  auto it = m_activeRemaps.find(button);
+  if (it != m_activeRemaps.end()) {
+    id = it->second.m_dstKey;
+    mask = it->second.m_dstMask;
+    m_activeRemaps.erase(it);
+  }
 
   // relay
   if (!m_keyboardBroadcasting && IKeyState::KeyInfo::isDefault(screens)) {
@@ -1596,6 +1622,13 @@ void Server::onKeyRepeat(KeyID id, KeyModifierMask mask, int32_t count, KeyButto
        lang.c_str())
   );
   assert(m_active != nullptr);
+
+  // use the remap established at key-down time for consistency
+  auto it = m_activeRemaps.find(button);
+  if (it != m_activeRemaps.end()) {
+    id = it->second.m_dstKey;
+    mask = it->second.m_dstMask;
+  }
 
   // relay
   m_active->keyRepeat(id, mask, count, button, lang);
@@ -2055,6 +2088,7 @@ void Server::forceLeaveClient(const BaseClientProxy *client)
 
     // cut over
     m_active = m_primaryClient;
+    m_activeRemaps.clear();
 
     // enter new screen (unless we already have because of the
     // screen saver)

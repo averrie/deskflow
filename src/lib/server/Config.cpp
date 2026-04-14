@@ -312,6 +312,46 @@ bool Config::removeOptions(const std::string &name)
   return true;
 }
 
+bool Config::addKeystrokeMapping(const std::string &name, const KeystrokeMapping &mapping)
+{
+  CellMap::iterator index = m_map.find(name);
+  if (index == m_map.end()) {
+    return false;
+  }
+  index->second.m_keystrokeMappings.push_back(mapping);
+  return true;
+}
+
+const Config::KeystrokeMapping *
+Config::findKeystrokeMapping(const std::string &screenName, KeyID key, KeyModifierMask mask) const
+{
+  // mask out toggle modifiers for comparison
+  static const KeyModifierMask kNonToggleMask =
+      KeyModifierShift | KeyModifierControl | KeyModifierAlt | KeyModifierMeta | KeyModifierSuper | KeyModifierAltGr;
+
+  CellMap::const_iterator index = m_map.find(screenName);
+  if (index == m_map.end()) {
+    return nullptr;
+  }
+
+  const KeyModifierMask maskedMask = mask & kNonToggleMask;
+  for (const auto &mapping : index->second.m_keystrokeMappings) {
+    if (mapping.getSrcKey() == key && mapping.getSrcMask() == maskedMask) {
+      return &mapping;
+    }
+  }
+  return nullptr;
+}
+
+const Config::KeystrokeMappings *Config::getKeystrokeMappings(const std::string &screenName) const
+{
+  CellMap::const_iterator index = m_map.find(screenName);
+  if (index == m_map.end()) {
+    return nullptr;
+  }
+  return &index->second.m_keystrokeMappings;
+}
+
 bool Config::isValidScreenName(const std::string &name) const
 {
   // name is valid if matches validname
@@ -796,6 +836,52 @@ void Config::readSectionScreens(ConfigReadContext &s)
         addOption(screen, kOptionScreenSwitchCornerSize, s.parseInt(value));
       } else if (name == "preserveFocus") {
         addOption(screen, kOptionScreenPreserveFocus, s.parseBoolean(value));
+      } else if (name.starts_with("keystroke(")) {
+        // re-parse name and value sides using parseNameWithArgs
+        std::string srcName, dstName;
+        ConfigReadContext::ArgList srcArgs, dstArgs;
+        std::string::size_type pos = 0;
+        s.parseNameWithArgs("source", name, "", pos, srcName, srcArgs);
+        pos = 0;
+        s.parseNameWithArgs("destination", value, "", pos, dstName, dstArgs);
+
+        if (srcArgs.size() != 1) {
+          throw ServerConfigReadException(s, "syntax for screen keystroke: keystroke(modifiers+key)");
+        }
+        if (dstName != "keystroke" || dstArgs.size() != 1) {
+          throw ServerConfigReadException(
+              s, "syntax for screen keystroke: keystroke(modifiers+key) = keystroke(modifiers+key)"
+          );
+        }
+
+        std::string srcStr = srcArgs[0];
+        std::string dstStr = dstArgs[0];
+
+        KeyModifierMask srcMask;
+        KeyID srcKey;
+        KeyModifierMask dstMask;
+        KeyID dstKey;
+
+        if (!deskflow::KeyMap::parseModifiers(srcStr, srcMask)) {
+          throw ServerConfigReadException(s, "unable to parse source keystroke modifiers");
+        }
+        if (!deskflow::KeyMap::parseKey(srcStr, srcKey)) {
+          throw ServerConfigReadException(s, "unable to parse source keystroke key");
+        }
+        if (srcKey == kKeyNone) {
+          throw ServerConfigReadException(s, "missing key in source keystroke");
+        }
+        if (!deskflow::KeyMap::parseModifiers(dstStr, dstMask)) {
+          throw ServerConfigReadException(s, "unable to parse destination keystroke modifiers");
+        }
+        if (!deskflow::KeyMap::parseKey(dstStr, dstKey)) {
+          throw ServerConfigReadException(s, "unable to parse destination keystroke key");
+        }
+        if (dstKey == kKeyNone) {
+          throw ServerConfigReadException(s, "missing key in destination keystroke");
+        }
+
+        addKeystrokeMapping(screen, KeystrokeMapping(srcKey, srcMask, dstKey, dstMask));
       } else {
         // unknown argument
         throw ServerConfigReadException(s, "unknown argument \"%{1}\"", name);
@@ -1438,6 +1524,44 @@ bool Config::CellEdge::operator==(const CellEdge &x) const
 }
 
 //
+// Config::KeystrokeMapping
+//
+
+Config::KeystrokeMapping::KeystrokeMapping(KeyID srcKey, KeyModifierMask srcMask, KeyID dstKey, KeyModifierMask dstMask)
+    : m_srcKey(srcKey),
+      m_srcMask(srcMask),
+      m_dstKey(dstKey),
+      m_dstMask(dstMask)
+{
+  // do nothing
+}
+
+KeyID Config::KeystrokeMapping::getSrcKey() const
+{
+  return m_srcKey;
+}
+
+KeyModifierMask Config::KeystrokeMapping::getSrcMask() const
+{
+  return m_srcMask;
+}
+
+KeyID Config::KeystrokeMapping::getDstKey() const
+{
+  return m_dstKey;
+}
+
+KeyModifierMask Config::KeystrokeMapping::getDstMask() const
+{
+  return m_dstMask;
+}
+
+bool Config::KeystrokeMapping::operator==(const KeystrokeMapping &x) const
+{
+  return (m_srcKey == x.m_srcKey && m_srcMask == x.m_srcMask && m_dstKey == x.m_dstKey && m_dstMask == x.m_dstMask);
+}
+
+//
 // Config::Cell
 //
 
@@ -1535,6 +1659,11 @@ bool Config::Cell::operator==(const Cell &x) const
     return false;
   }
 
+  // compare keystroke mappings
+  if (m_keystrokeMappings != x.m_keystrokeMappings) {
+    return false;
+  }
+
   // compare links
   if (m_neighbors.size() != x.m_neighbors.size()) {
     return false;
@@ -1595,6 +1724,13 @@ std::ostream &operator<<(std::ostream &s, const Config &config)
         if (name != nullptr && !value.empty()) {
           s << "\t\t" << name << " = " << value << std::endl;
         }
+      }
+    }
+    const auto *mappings = config.getKeystrokeMappings(screen);
+    if (mappings != nullptr) {
+      for (const auto &m : *mappings) {
+        s << "\t\tkeystroke(" << deskflow::KeyMap::formatKey(m.getSrcKey(), m.getSrcMask()) << ") = keystroke("
+          << deskflow::KeyMap::formatKey(m.getDstKey(), m.getDstMask()) << ")" << std::endl;
       }
     }
   }
